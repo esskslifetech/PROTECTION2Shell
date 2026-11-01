@@ -437,8 +437,13 @@ assert_contains "legacy drop-in was backed up" "$TMP/legacy-scan/99-pSP-hardenin
 assert_eq "backup copy of the legacy drop-in exists" 1 \
   "$([ -f "$P2S_BACKUP_DIR/files/${TMP#/}/legacy-scan/99-pSP-hardening.ini" ] && echo 1 || echo 0)"
 # old backup tree must still be discoverable (rename must not strand rollbacks)
+# NOTE: no `case` inside $(...) here. macOS still ships bash 3.2 and that is the
+# compatibility floor, and 3.2 closes the substitution at the first `)` of a case
+# pattern — the rest of the line then reaches the assert as literal text. Spell
+# it as a statement instead; bash 5 and dash both parse that the same way.
 base="$(p2s_backup_base)"
-assert_eq "backup base resolves to a path" 1 "$(case "$base" in /*) echo 1 ;; *) echo 0 ;; esac)"
+case "$base" in /*) base_absolute=1 ;; *) base_absolute=0 ;; esac
+assert_eq "backup base resolves to a path" 1 "$base_absolute"
 
 step "24. rename hygiene"
 # No tracked path still carries the v1 name, no executable identifier does, and
@@ -488,6 +493,16 @@ assert_eq "INSTALL.md shipped" 1 "$([ -f "$P2S_ROOT/INSTALL.md" ] && echo 1 || e
 assert_contains "INSTALL.md tells people to run bash setup.sh" "bash setup.sh" "$(cat "$P2S_ROOT/INSTALL.md")"
 assert_contains "INSTALL.md maps the exec-bit failure" "Permission denied" "$(cat "$P2S_ROOT/INSTALL.md")"
 assert_contains "README points at INSTALL.md" "INSTALL.md" "$(cat "$P2S_ROOT/README.md")"
+
+step "26. bash 3.2 parse hazards (macOS compatibility floor)"
+# Syntax that bash 5 accepts and bash 3.2 mis-parses is the class of bug that
+# passes on Linux and silently breaks on macOS, and `bash -n` cannot catch it
+# (3.2 is not on the Linux runner). So grep for the shapes instead of trusting
+# memory: `case` inside $(...) is the one that cost a red CI here, and the
+# guarded empty-array expansion is the one that cost 2.0.1.
+pat='\$\( *case '
+hazards="$(find "$P2S_ROOT" -type f -name '*.sh' -not -path '*/.git/*' -exec grep -lnE "$pat" {} + 2>/dev/null || true)"
+assert_eq "no case statement inside a command substitution" "" "$hazards"
 
 step "Results"
 log "passed: $PASS   failed: $FAIL"
